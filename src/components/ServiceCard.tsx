@@ -28,6 +28,8 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
   const isLongPressedRef = useRef(false);
   const startPosRef = useRef<{ x: number; y: number } | null>(null);
 
+  const lastTouchTimeRef = useRef(0);
+
   const { url: activeUrl, isLocal } = getActiveServiceUrl(
     service,
     networkMode,
@@ -60,36 +62,54 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
     }
   };
 
-  // Long press handling (500ms hold opens edit page)
-  const handlePressStart = (clientX: number, clientY: number) => {
+  // Long press & tap handling with strict scrolling detection
+  const handlePressStart = (clientX: number, clientY: number, isTouch = false) => {
+    if (isTouch) {
+      lastTouchTimeRef.current = Date.now();
+    } else {
+      // If a touch event just happened within 800ms, ignore the emulated synthetic mouse event
+      if (Date.now() - lastTouchTimeRef.current < 800) {
+        return;
+      }
+    }
+
     isLongPressedRef.current = false;
     startPosRef.current = { x: clientX, y: clientY };
     setIsPressing(true);
 
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
-      isLongPressedRef.current = true;
-      setIsPressing(false);
-      try {
-        navigator.vibrate?.(50);
-      } catch {
-        // ignore
+      // Only fire long press if the user hasn't moved/scrolled
+      if (startPosRef.current) {
+        isLongPressedRef.current = true;
+        setIsPressing(false);
+        startPosRef.current = null;
+        try {
+          navigator.vibrate?.(50);
+        } catch {
+          // ignore
+        }
+        onEdit(service);
       }
-      onEdit(service);
     }, 500);
   };
 
-  const handlePressEnd = () => {
+  const handlePressEnd = (isTouch = false) => {
+    if (!isTouch && Date.now() - lastTouchTimeRef.current < 800) {
+      return;
+    }
+
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
     const wasLongPress = isLongPressedRef.current;
+    const hadValidTouchStart = startPosRef.current !== null;
     setIsPressing(false);
     startPosRef.current = null;
 
-    // If it was a regular tap/click and not long-press, open service URL
-    if (!wasLongPress && !isReorderMode) {
+    // Only open the service if it was a genuine, non-scrolling tap and not in reorder mode
+    if (hadValidTouchStart && !wasLongPress && !isReorderMode) {
       navigateToService();
     }
   };
@@ -99,8 +119,9 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+    isLongPressedRef.current = false;
     setIsPressing(false);
-    startPosRef.current = null;
+    startPosRef.current = null; // Invalidate tap so touchEnd will NOT trigger navigateToService
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
@@ -108,8 +129,8 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
     const touch = e.touches[0];
     const diffX = Math.abs(touch.clientX - startPosRef.current.x);
     const diffY = Math.abs(touch.clientY - startPosRef.current.y);
-    // Cancel long press if user is scrolling/swiping
-    if (diffX > 10 || diffY > 10) {
+    // If the finger moves more than 6px in any direction, user is scrolling: cancel the click & long-press!
+    if (diffX > 6 || diffY > 6) {
       handlePressCancel();
     }
   };
@@ -139,17 +160,17 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             : 'group-hover:scale-110 group-hover:-translate-y-1.5 group-active:scale-95'
         }`}
         onMouseDown={(e) => {
-          if (e.button === 0) handlePressStart(e.clientX, e.clientY);
+          if (e.button === 0) handlePressStart(e.clientX, e.clientY, false);
         }}
         onMouseUp={(e) => {
-          if (e.button === 0) handlePressEnd();
+          if (e.button === 0) handlePressEnd(false);
         }}
         onMouseLeave={handlePressCancel}
         onTouchStart={(e) => {
           const touch = e.touches[0];
-          handlePressStart(touch.clientX, touch.clientY);
+          handlePressStart(touch.clientX, touch.clientY, true);
         }}
-        onTouchEnd={handlePressEnd}
+        onTouchEnd={() => handlePressEnd(true)}
         onTouchCancel={handlePressCancel}
         onTouchMove={handleTouchMove}
       >

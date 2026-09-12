@@ -41,7 +41,7 @@ import { ServiceModal } from './components/ServiceModal';
 import { SettingsModal } from './components/SettingsModal';
 
 const STORAGE_KEYS = {
-  SERVICES: 'homelab_docker_services_v2',
+  SERVICES: 'homelab_docker_services_clean_v3',
   SETTINGS: 'homelab_docker_settings_v2',
   GATEWAY: 'homelab_docker_gateway_v2',
 };

@@ -215,15 +215,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (confirm('Reset all services to default Docker homelab stack? Custom services will be replaced.')) {
-                    onResetDefaultServices();
-                    onClose();
-                  }
+                  onResetDefaultServices();
+                  onClose();
                 }}
                 className="w-full flex items-center justify-center gap-2 p-2.5 rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-xs font-medium text-rose-300 transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>Reset to Default Popular Services</span>
+                <span>Clear All Services (Clean Slate)</span>
               </button>
             </div>
           </div>
