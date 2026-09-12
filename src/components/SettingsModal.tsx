@@ -35,6 +35,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [importStatus, setImportStatus] = React.useState<{ success: boolean; message: string } | null>(null);
+
   if (!isOpen) return null;
 
   const handleExportJson = () => {
@@ -68,17 +70,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           if (json.settings) {
             onUpdateSettings(json.settings);
           }
-          alert(`Successfully imported ${json.services.length} services!`);
-          onClose();
+          setImportStatus({ success: true, message: `Successfully imported ${json.services.length} services to database!` });
         } else if (Array.isArray(json)) {
           onImportServices(json);
-          alert(`Successfully imported ${json.length} services!`);
-          onClose();
+          setImportStatus({ success: true, message: `Successfully imported ${json.length} services to database!` });
         } else {
-          alert('Invalid backup format. Expected a JSON file with services list.');
+          setImportStatus({ success: false, message: 'Invalid backup format. Expected a JSON file with services list.' });
         }
       } catch (err) {
-        alert('Failed to parse backup JSON file.');
+        setImportStatus({ success: false, message: 'Failed to parse backup JSON file.' });
       }
     };
     reader.readAsText(file);
@@ -183,6 +183,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <label className="block text-xs font-semibold uppercase text-slate-400">
               Backup & Data Management
             </label>
+
+            {/* Import feedback status */}
+            {importStatus && (
+              <div
+                className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+                  importStatus.success
+                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-200'
+                    : 'bg-rose-500/15 border-rose-500/30 text-rose-200'
+                }`}
+              >
+                <span>{importStatus.message}</span>
+                <button
+                  type="button"
+                  onClick={() => setImportStatus(null)}
+                  className="text-slate-400 hover:text-slate-200 ml-2"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button

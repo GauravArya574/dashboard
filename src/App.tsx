@@ -1,11 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   FolderOpen,
   Plus,
   Wifi,
   Globe,
   GripHorizontal,
-  Check
+  Check,
+  AlertTriangle,
+  Loader2,
+  RefreshCw,
+  X
 } from 'lucide-react';
 import {
   DndContext,
@@ -29,22 +33,27 @@ import {
   DashboardSettings, 
   NetworkMode
 } from './types';
-import { AnimatePresence } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 import { DEFAULT_SERVICES } from './data/defaultServices';
 import { performGatewayDetection, getActiveServiceUrl } from './utils/networkDetector';
 import { pingService } from './utils/healthChecker';
+import { supabase, isSupabaseConfigured } from './lib/supabase';
+import { 
+  fetchServices, 
+  createService, 
+  updateService, 
+  deleteService, 
+  batchUpsertServices,
+  clearAllServices,
+  DatabaseServiceRow,
+  mapRowToService 
+} from './lib/services';
 import { Navbar } from './components/Navbar';
 import { ServiceCard } from './components/ServiceCard';
 import { SortableServiceCard } from './components/SortableServiceCard';
 import { GatewaySettingsModal } from './components/GatewaySettingsModal';
 import { ServiceModal } from './components/ServiceModal';
 import { SettingsModal } from './components/SettingsModal';
-
-const STORAGE_KEYS = {
-  SERVICES: 'homelab_docker_services_clean_v3',
-  SETTINGS: 'homelab_docker_settings_v2',
-  GATEWAY: 'homelab_docker_gateway_v2',
-};
 
 const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
   mode: 'auto',
@@ -69,66 +78,18 @@ const DEFAULT_SETTINGS: DashboardSettings = {
 };
 
 export default function App() {
-  // 1. Services State
-  const [services, setServices] = useState<DockerService[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.SERVICES);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Upgrade any dark-colored icons (like vaultwarden.png) to their clear -light variants
-          return parsed.map((svc: DockerService) => {
-            if (
-              svc.icon &&
-              svc.icon.includes('/vaultwarden.png') &&
-              !svc.icon.includes('vaultwarden-light.png')
-            ) {
-              return {
-                ...svc,
-                icon: svc.icon.replace('/vaultwarden.png', '/vaultwarden-light.png'),
-              };
-            }
-            return svc;
-          });
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return DEFAULT_SERVICES;
-  });
+  // 1. Database & Services State (Supabase ONLY)
+  const [services, setServices] = useState<DockerService[]>([]);
+  const [isLoadingServices, setIsLoadingServices] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
 
-  // 2. Gateway Config State
-  const [gatewayConfig, setGatewayConfig] = useState<GatewayConfig>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.GATEWAY);
-      if (saved) return JSON.parse(saved);
-    } catch {
-      // ignore
-    }
-    return DEFAULT_GATEWAY_CONFIG;
-  });
+  // 2. Gateway Config State (In-Memory Runtime)
+  const [gatewayConfig, setGatewayConfig] = useState<GatewayConfig>(DEFAULT_GATEWAY_CONFIG);
 
-  // 3. Settings State
-  const [settings, setSettings] = useState<DashboardSettings>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return {
-          ...DEFAULT_SETTINGS,
-          ...parsed,
-          // Guarantee 5s default interval for remote url availability pinging
-          refreshIntervalSeconds: parsed.refreshIntervalSeconds || 5,
-        };
-      }
-    } catch {
-      // ignore
-    }
-    return DEFAULT_SETTINGS;
-  });
+  // 3. Settings State (In-Memory Runtime)
+  const [settings, setSettings] = useState<DashboardSettings>(DEFAULT_SETTINGS);
 
-  // 4. Live Health & Refresh State
+  // 4. Live Health & Refresh State (Runtime only, not stored in DB)
   const [serviceStatuses, setServiceStatuses] = useState<Record<string, ServiceStatus>>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
@@ -152,6 +113,82 @@ export default function App() {
     })
   );
 
+  // Fetch Services directly from Supabase (Strictly no localStorage)
+  const loadServicesFromDb = useCallback(async () => {
+    setIsLoadingServices(true);
+    setDbError(null);
+
+    if (!isSupabaseConfigured || !supabase) {
+      setIsLoadingServices(false);
+      setDbError(
+        'Supabase is not configured. Please define VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.'
+      );
+      return;
+    }
+
+    try {
+      const fetched = await fetchServices();
+      setServices(fetched);
+    } catch (err: unknown) {
+      let errorMsg = 'Failed to connect to Supabase database.';
+      if (err instanceof Error) {
+        errorMsg = err.message;
+      } else if (typeof err === 'object' && err !== null) {
+        const anyErr = err as { message?: string; details?: string; hint?: string; code?: string };
+        errorMsg = anyErr.message || anyErr.details || anyErr.hint || JSON.stringify(err);
+      }
+      console.error('Failed to load services from Supabase:', err);
+      setDbError(errorMsg);
+    } finally {
+      setIsLoadingServices(false);
+    }
+  }, []);
+
+  // Initial Boot: Load DB and detect gateway
+  useEffect(() => {
+    loadServicesFromDb();
+  }, [loadServicesFromDb]);
+
+  // Realtime Cross-Device Synchronization via Supabase Postgres Changes
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+
+    const channel = supabase
+      .channel('public:services_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'services',
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newSvc = mapRowToService(payload.new as DatabaseServiceRow);
+            setServices((prev) => {
+              if (prev.some((s) => s.id === newSvc.id)) return prev;
+              return [...prev, newSvc];
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedSvc = mapRowToService(payload.new as DatabaseServiceRow);
+            setServices((prev) =>
+              prev.map((s) => (s.id === updatedSvc.id ? updatedSvc : s))
+            );
+          } else if (payload.eventType === 'DELETE') {
+            const deletedId = (payload.old as { id?: string })?.id;
+            if (deletedId) {
+              setServices((prev) => prev.filter((s) => s.id !== deletedId));
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (over && active.id !== over.id) {
@@ -166,33 +203,6 @@ export default function App() {
     }
   };
 
-  // Persist Services
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.SERVICES, JSON.stringify(services));
-    } catch {
-      // ignore
-    }
-  }, [services]);
-
-  // Persist Gateway Config
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.GATEWAY, JSON.stringify(gatewayConfig));
-    } catch {
-      // ignore
-    }
-  }, [gatewayConfig]);
-
-  // Persist Settings
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-    } catch {
-      // ignore
-    }
-  }, [settings]);
-
   // Handle Theme Sync
   useEffect(() => {
     const root = document.documentElement;
@@ -201,7 +211,6 @@ export default function App() {
     } else if (settings.theme === 'light') {
       root.classList.remove('dark');
     } else {
-      // System
       const isSystemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       if (isSystemDark) {
         root.classList.add('dark');
@@ -224,7 +233,7 @@ export default function App() {
     }
   }, [gatewayConfig]);
 
-  // Single Service Health Probe - tests availability by pinging external remote url
+  // Single Service Health Probe
   const probeSingleService = useCallback(
     async (service: DockerService) => {
       setServiceStatuses((prev) => ({
@@ -248,7 +257,7 @@ export default function App() {
 
   // Refresh All Services Health simultaneously
   const refreshAllStatuses = useCallback(async () => {
-    if (isRefreshing) return;
+    if (isRefreshing || services.length === 0) return;
     setIsRefreshing(true);
 
     await Promise.all(
@@ -264,43 +273,118 @@ export default function App() {
     setIsRefreshing(false);
   }, [isRefreshing, services]);
 
-  // Initial Boot Detection
+  // Initial Gateway detection
   useEffect(() => {
     triggerGatewayDetection();
-  }, []);
+  }, [triggerGatewayDetection]);
 
-  // Run initial probe once services are ready or network mode changes
+  // Run probe once services are fetched or network mode changes
   useEffect(() => {
-    refreshAllStatuses();
+    if (services.length > 0) {
+      refreshAllStatuses();
+    }
   }, [services.length, gatewayConfig.mode, gatewayConfig.isHomeWifiDetected]);
 
   // Auto-refresh interval
   useEffect(() => {
-    if (!autoRefreshEnabled) return;
+    if (!autoRefreshEnabled || services.length === 0) return;
 
     const interval = setInterval(() => {
       refreshAllStatuses();
     }, settings.refreshIntervalSeconds * 1000);
 
     return () => clearInterval(interval);
-  }, [autoRefreshEnabled, settings.refreshIntervalSeconds, refreshAllStatuses]);
+  }, [autoRefreshEnabled, settings.refreshIntervalSeconds, refreshAllStatuses, services.length]);
 
-  // Service CRUD handlers
-  const handleSaveService = (service: DockerService) => {
-    setServices((prev) => {
-      const index = prev.findIndex((s) => s.id === service.id);
-      if (index >= 0) {
-        const updated = [...prev];
-        updated[index] = service;
-        return updated;
+  // Service CRUD handlers: Direct Database Operations with optimistic fallback & error prevention
+  const handleSaveService = async (service: DockerService) => {
+    setDbError(null);
+    const isExisting = services.some((s) => s.id === service.id);
+
+    try {
+      if (isSupabaseConfigured && supabase) {
+        let savedService: DockerService;
+        if (isExisting) {
+          savedService = await updateService(service);
+        } else {
+          savedService = await createService(service);
+        }
+
+        setServices((prev) => {
+          const index = prev.findIndex((s) => s.id === savedService.id);
+          if (index >= 0) {
+            const updated = [...prev];
+            updated[index] = savedService;
+            return updated;
+          }
+          return [...prev, savedService];
+        });
+        setTimeout(() => probeSingleService(savedService), 100);
+      } else {
+        // Unconfigured Supabase: preserve locally
+        setServices((prev) => {
+          const index = prev.findIndex((s) => s.id === service.id);
+          if (index >= 0) {
+            const updated = [...prev];
+            updated[index] = service;
+            return updated;
+          }
+          return [...prev, service];
+        });
+        setTimeout(() => probeSingleService(service), 100);
       }
-      return [...prev, service];
-    });
-    setTimeout(() => probeSingleService(service), 100);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to save service to Supabase.';
+      console.error('Error in handleSaveService:', err);
+      setDbError(errorMsg);
+      throw err; // Re-throw to inform modal that save failed
+    }
   };
 
-  const handleDeleteService = (serviceId: string) => {
-    setServices((prev) => prev.filter((s) => s.id !== serviceId));
+  const handleDeleteService = async (serviceId: string) => {
+    setDbError(null);
+    try {
+      if (isSupabaseConfigured && supabase) {
+        await deleteService(serviceId);
+      }
+      setServices((prev) => prev.filter((s) => s.id !== serviceId));
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to delete service from Supabase.';
+      console.error('Error in handleDeleteService:', err);
+      setDbError(errorMsg);
+      throw err;
+    }
+  };
+
+  const handleImportServices = async (importedList: DockerService[]) => {
+    setDbError(null);
+    try {
+      if (isSupabaseConfigured && supabase) {
+        const saved = await batchUpsertServices(importedList);
+        setServices(saved);
+      } else {
+        setServices(importedList);
+      }
+      refreshAllStatuses();
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to import services into Supabase.';
+      console.error('Error in handleImportServices:', err);
+      setDbError(errorMsg);
+    }
+  };
+
+  const handleResetServices = async () => {
+    setDbError(null);
+    try {
+      if (isSupabaseConfigured && supabase) {
+        await clearAllServices();
+      }
+      setServices([]);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to clear services in Supabase.';
+      console.error('Error in handleResetServices:', err);
+      setDbError(errorMsg);
+    }
   };
 
   const handleOpenEditModal = (service: DockerService) => {
@@ -316,15 +400,6 @@ export default function App() {
   const handleSetNetworkMode = (mode: NetworkMode) => {
     setGatewayConfig((prev) => ({ ...prev, mode }));
   };
-
-  const handleToggleTheme = () => {
-    const next = settings.theme === 'dark' ? 'light' : 'dark';
-    setSettings((prev) => ({ ...prev, theme: next }));
-  };
-
-  const isHomeActive =
-    gatewayConfig.mode === 'home' ||
-    (gatewayConfig.mode === 'auto' && gatewayConfig.isHomeWifiDetected);
 
   return (
     <div className="relative min-h-screen w-full overflow-x-hidden bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
@@ -345,7 +420,6 @@ export default function App() {
         >
           <source src="/aurora-bg.mp4" type="video/mp4" />
         </video>
-        {/* Subtle dark vignette & depth overlay for optimal contrast and readability */}
         <div className="absolute inset-0 bg-gradient-to-b from-slate-950/40 via-slate-950/15 to-slate-950/70" />
         <div className="absolute inset-0 bg-slate-950/20 backdrop-brightness-90" />
       </div>
@@ -364,9 +438,47 @@ export default function App() {
         />
       </div>
 
-      {/* Main Content Area: Service Icons Grid (No Outer Boundary Cards, No Category Grouping, No Search) */}
+      {/* Database Error Banner (Non-destructive) */}
+      {dbError && (
+        <div className="relative z-30 max-w-7xl w-full mx-auto px-4 sm:px-6 pt-4">
+          <div className="flex items-center justify-between p-3.5 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-200 text-xs backdrop-blur-md shadow-lg">
+            <div className="flex items-center gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>
+                <strong className="font-semibold text-rose-100">Database Sync Error:</strong> {dbError}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadServicesFromDb}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 font-medium transition-colors"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>Retry</span>
+              </button>
+              <button
+                onClick={() => setDbError(null)}
+                className="p-1 rounded-lg hover:bg-rose-500/20 text-rose-400 hover:text-rose-200"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main Content Area: Service Icons Grid */}
       <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 flex flex-col justify-start">
-        {services.length === 0 ? (
+        {isLoadingServices ? (
+          <div
+            id="loading-services-state"
+            className="flex flex-col items-center justify-center p-16 text-center rounded-3xl border border-slate-800/50 bg-slate-900/20 backdrop-blur-sm my-8"
+          >
+            <Loader2 className="w-9 h-9 text-indigo-400 animate-spin mb-3" />
+            <h3 className="font-semibold text-sm text-slate-200">Loading Docker Services</h3>
+            <p className="text-xs text-slate-400 mt-1">Connecting to Supabase database...</p>
+          </div>
+        ) : services.length === 0 ? (
           <div
             id="empty-services-state"
             className="flex flex-col items-center justify-center p-12 text-center rounded-3xl border border-dashed border-slate-800 bg-slate-900/30 my-8"
@@ -376,7 +488,7 @@ export default function App() {
             </div>
             <h3 className="font-bold text-base text-slate-200">No Services Configured</h3>
             <p className="text-xs text-slate-400 max-w-sm mt-1 mb-4">
-              Add your first self-hosted docker service or restore presets from Settings.
+              Add your first self-hosted docker service to sync it to Supabase across all devices.
             </p>
             <button
               onClick={handleOpenAddModal}
@@ -426,7 +538,6 @@ export default function App() {
                 className="group relative flex flex-col items-center justify-start cursor-pointer select-none py-2 w-full max-w-[96px] sm:max-w-[116px] md:max-w-[128px]"
                 title="Add New Service"
               >
-                {/* Soft glow on hover */}
                 <div className="absolute inset-0 -m-3 rounded-full bg-indigo-500/0 group-hover:bg-indigo-500/20 group-hover:blur-xl transition-all duration-300 pointer-events-none opacity-0 group-hover:opacity-100" />
                 <div
                   className="flex items-center justify-center w-20 h-20 xs:w-22 xs:h-22 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-3xl border-2 border-dashed border-slate-800 hover:border-indigo-500/80 bg-slate-900/30 hover:bg-indigo-950/20 text-slate-500 hover:text-indigo-400 transition-all duration-300 group-hover:scale-110 group-hover:-translate-y-1.5 group-active:scale-95 group-hover:shadow-[0_0_24px_rgba(99,102,241,0.25)] relative z-10"
@@ -438,7 +549,7 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Drag-and-Drop Reorder Action beside the Add button */}
+              {/* Drag-and-Drop Reorder Action */}
               <div
                 id="reorder-services-tile"
                 onClick={() => setIsReorderMode((prev) => !prev)}
@@ -453,7 +564,6 @@ export default function App() {
                 className="group relative flex flex-col items-center justify-start cursor-pointer select-none py-2 w-full max-w-[96px] sm:max-w-[116px] md:max-w-[128px]"
                 title={isReorderMode ? 'Finish Reordering' : 'Reorder Docker Services'}
               >
-                {/* Soft glow on hover */}
                 <div className="absolute inset-0 -m-3 rounded-full bg-indigo-500/0 group-hover:bg-indigo-500/20 group-hover:blur-xl transition-all duration-300 pointer-events-none opacity-0 group-hover:opacity-100" />
                 <div
                   className={`flex items-center justify-center w-20 h-20 xs:w-22 xs:h-22 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-3xl border-2 transition-all duration-300 relative z-10 ${
@@ -483,7 +593,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Modals with AnimatePresence for smooth entry and exit transitions */}
+      {/* Modals */}
       <AnimatePresence mode="wait">
         {isGatewayModalOpen && (
           <GatewaySettingsModal
@@ -520,17 +630,12 @@ export default function App() {
             settings={settings}
             onUpdateSettings={(newSettings) => setSettings((prev) => ({ ...prev, ...newSettings }))}
             services={services}
-            onImportServices={(imported) => {
-              setServices(imported);
-              refreshAllStatuses();
-            }}
-            onResetDefaultServices={() => {
-              setServices(DEFAULT_SERVICES);
-              refreshAllStatuses();
-            }}
+            onImportServices={handleImportServices}
+            onResetDefaultServices={handleResetServices}
           />
         )}
       </AnimatePresence>
     </div>
   );
 }
+

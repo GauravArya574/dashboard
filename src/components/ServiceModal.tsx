@@ -7,8 +7,8 @@ import { autoFetchServiceIcon } from '../utils/iconFetcher';
 interface ServiceModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (service: DockerService) => void;
-  onDelete?: (serviceId: string) => void;
+  onSave: (service: DockerService) => void | Promise<void>;
+  onDelete?: (serviceId: string) => void | Promise<void>;
   serviceToEdit?: DockerService | null;
 }
 
@@ -25,6 +25,8 @@ export const ServiceModal: React.FC<ServiceModalProps> = ({
   const [customIcon, setCustomIcon] = useState('');
   const [iconError, setIconError] = useState(false);
   const [showCustomIconField, setShowCustomIconField] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   // Auto-derived or custom icon
   const computedIcon = customIcon.trim() ? customIcon.trim() : autoFetchServiceIcon(name);
@@ -33,6 +35,8 @@ export const ServiceModal: React.FC<ServiceModalProps> = ({
 
   useEffect(() => {
     setIsConfirmingDelete(false);
+    setModalError(null);
+    setIsSubmitting(false);
     if (serviceToEdit) {
       setName(serviceToEdit.name);
       setLocalUrl(serviceToEdit.localUrl);
@@ -63,7 +67,7 @@ export const ServiceModal: React.FC<ServiceModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
     if (!localUrl.trim()) return;
@@ -76,14 +80,32 @@ export const ServiceModal: React.FC<ServiceModalProps> = ({
       remoteUrl: remoteUrl.trim() || localUrl.trim(),
     };
 
-    onSave(finalService);
-    onClose();
+    setIsSubmitting(true);
+    setModalError(null);
+    try {
+      await onSave(finalService);
+      onClose();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save service.';
+      setModalError(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (serviceToEdit && onDelete) {
-      onDelete(serviceToEdit.id);
-      onClose();
+      setIsSubmitting(true);
+      setModalError(null);
+      try {
+        await onDelete(serviceToEdit.id);
+        onClose();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Failed to delete service.';
+        setModalError(msg);
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -141,6 +163,20 @@ export const ServiceModal: React.FC<ServiceModalProps> = ({
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="flex-1 p-6 space-y-4 overflow-y-auto flex flex-col">
+          {/* Database error banner */}
+          {modalError && (
+            <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-200 text-xs flex items-center justify-between">
+              <span>{modalError}</span>
+              <button
+                type="button"
+                onClick={() => setModalError(null)}
+                className="text-rose-400 hover:text-rose-200 ml-2"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Service Name & Auto-Fetched Icon Preview */}
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
@@ -249,14 +285,20 @@ export const ServiceModal: React.FC<ServiceModalProps> = ({
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
+                    disabled={isSubmitting}
                     onClick={handleDelete}
-                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 rounded-lg shadow-sm transition-all"
+                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 disabled:opacity-50 rounded-lg shadow-sm transition-all"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Confirm Delete</span>
+                    {isSubmitting ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" />
+                    )}
+                    <span>{isSubmitting ? 'Deleting...' : 'Confirm Delete'}</span>
                   </button>
                   <button
                     type="button"
+                    disabled={isSubmitting}
                     onClick={() => setIsConfirmingDelete(false)}
                     className="px-2 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
                   >
@@ -266,6 +308,7 @@ export const ServiceModal: React.FC<ServiceModalProps> = ({
               ) : (
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setIsConfirmingDelete(true)}
                   className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors"
                 >
@@ -280,6 +323,7 @@ export const ServiceModal: React.FC<ServiceModalProps> = ({
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={onClose}
                 className="px-4 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 rounded-xl transition-colors"
               >
@@ -287,10 +331,15 @@ export const ServiceModal: React.FC<ServiceModalProps> = ({
               </button>
               <button
                 type="submit"
-                className="flex items-center gap-1.5 px-5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl shadow-lg shadow-indigo-600/25 active:scale-95 transition-all"
+                disabled={isSubmitting}
+                className="flex items-center gap-1.5 px-5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-xl shadow-lg shadow-indigo-600/25 active:scale-95 transition-all"
               >
-                <Check className="w-4 h-4" />
-                <span>Save</span>
+                {isSubmitting ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
+                <span>{isSubmitting ? 'Saving...' : 'Save'}</span>
               </button>
             </div>
           </div>
