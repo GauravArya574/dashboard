@@ -1,0 +1,7 @@
+{
+  "name": "Homelab Docker Dashboard",
+  "description": "A modern self-hosted Docker services dashboard with automatic default gateway detection for smart LAN/WAN link switching, image icons, and auto-refreshing service status indicators.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
