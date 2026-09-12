@@ -20,21 +20,14 @@ export interface ServiceStatus {
   message?: string;
 }
 
-export type NetworkMode = 'auto' | 'home' | 'remote';
+export type NetworkMode = 'home' | 'remote';
 
 export interface GatewayConfig {
-  mode: NetworkMode; // 'auto' | 'home' | 'remote'
+  mode: NetworkMode; // 'home' | 'remote'
   homeGatewayIp: string; // e.g., "192.168.1.1" or "10.0.0.1"
   homeSubnetPrefix: string; // e.g., "192.168.1." or "10.0.0."
   probeLocalHost: string; // e.g., "http://192.168.1.1" or local server IP
   pingIntervalSeconds: number;
-  detectedGateway?: string;
-  detectedLocalIp?: string;
-  isHomeWifiDetected: boolean;
-  lastDetectedAt: number;
-  detectionMethod: 'webrtc' | 'probe' | 'manual' | 'server' | 'hybrid';
-  probeLatencyMs?: number;
-  autoDetectEnabled: boolean;
 }
 
 export interface DashboardSettings {
@@ -44,6 +37,7 @@ export interface DashboardSettings {
   customTitle: string;
   customSubtitle: string;
   gatewayConfig: GatewayConfig;
+  backgroundImage?: string; // Custom background image URL or Base64 Data URL
 }
 
 export interface DockerHostMetrics {

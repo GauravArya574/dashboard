@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabase';
-import { DockerService } from '../types';
+import { DockerService, GatewayConfig, DashboardSettings } from '../types';
 
 export interface DatabaseServiceRow {
   id: string;
@@ -60,7 +60,9 @@ export async function fetchServices(): Promise<DockerService[]> {
       throw new Error(`Supabase Query Failed: ${detail}`);
     }
 
-  return (data || []).map((row: DatabaseServiceRow) => mapRowToService(row));
+  return (data || [])
+    .filter((row: DatabaseServiceRow) => row.id !== APP_CONFIG_ROW_ID && row.name !== '__SYSTEM_SETTINGS__')
+    .map((row: DatabaseServiceRow) => mapRowToService(row));
 }
 
 /**
@@ -200,3 +202,168 @@ export async function clearAllServices(): Promise<void> {
     throw error;
   }
 }
+
+export interface AppConfigPayload {
+  gatewayConfig?: Partial<GatewayConfig>;
+  settings?: Partial<DashboardSettings>;
+}
+
+const APP_CONFIG_ROW_ID = 'app_global_settings';
+
+/**
+ * Loads gateway and dashboard settings from Supabase.
+ * Checks for a special configuration record in 'settings' table or fallback record in 'services' table.
+ */
+export async function fetchAppSettings(): Promise<{
+  gatewayConfig?: Partial<GatewayConfig>;
+  settings?: Partial<DashboardSettings>;
+} | null> {
+  if (!isSupabaseConfigured || !supabase) return null;
+
+  try {
+    // 1. Try fetching from a dedicated 'settings' table if user created it
+    const { data: settingsData, error: settingsError } = await supabase
+      .from('settings')
+      .select('*')
+      .eq('id', APP_CONFIG_ROW_ID)
+      .maybeSingle();
+
+    if (!settingsError && settingsData) {
+      return {
+        gatewayConfig: settingsData.gateway_config || settingsData.gatewayConfig,
+        settings: settingsData.dashboard_settings || settingsData.settings,
+      };
+    }
+  } catch {
+    // Dedicated settings table might not exist; try fallback record
+  }
+
+  try {
+    // 2. Fallback: check special metadata row in 'services' table where id = 'app_global_settings'
+    const { data: serviceRow, error: serviceError } = await supabase
+      .from('services')
+      .select('*')
+      .eq('id', APP_CONFIG_ROW_ID)
+      .maybeSingle();
+
+    if (!serviceError && serviceRow && serviceRow.health_endpoint) {
+      try {
+        const parsed = JSON.parse(serviceRow.health_endpoint);
+        return parsed;
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+/**
+ * Saves gateway config and dashboard settings to Supabase.
+ */
+export async function saveAppSettings(
+  payload: AppConfigPayload
+): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) return;
+
+  const now = new Date().toISOString();
+
+  // 1. Try saving to 'settings' table first
+  try {
+    const { error: settingsError } = await supabase
+      .from('settings')
+      .upsert({
+        id: APP_CONFIG_ROW_ID,
+        gateway_config: payload.gatewayConfig,
+        dashboard_settings: payload.settings,
+        updated_at: now,
+      }, { onConflict: 'id' });
+
+    if (!settingsError) return;
+  } catch {
+    // fallback below
+  }
+
+  // 2. Fallback: Upsert into 'services' table with a reserved config row ID so it works on any standard 'services' table schema
+  try {
+    const configRow = {
+      id: APP_CONFIG_ROW_ID,
+      name: '__SYSTEM_SETTINGS__',
+      icon: 'Settings',
+      local_url: 'http://localhost',
+      remote_url: 'http://localhost',
+      health_endpoint: JSON.stringify(payload),
+      created_at: now,
+      updated_at: now,
+    };
+
+    await supabase
+      .from('services')
+      .upsert(configRow, { onConflict: 'id' });
+  } catch (err) {
+    console.warn('Could not persist app settings to Supabase:', err);
+  }
+}
+
+// In-flight queue and timer for debounced settings saving
+let pendingConfigPayload: AppConfigPayload = {};
+let debouncedSaveTimeout: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Debounced save mechanism for settings to prevent rapid concurrent database writes
+ * during user input, slider changes, or rapid configuration updates.
+ */
+export function debouncedSaveAppSettings(
+  payload: AppConfigPayload,
+  delayMs: number = 500
+): Promise<void> {
+  // Merge incoming payload into the pending queue
+  pendingConfigPayload = {
+    gatewayConfig: {
+      ...pendingConfigPayload.gatewayConfig,
+      ...payload.gatewayConfig,
+    },
+    settings: {
+      ...pendingConfigPayload.settings,
+      ...payload.settings,
+    },
+  };
+
+  if (debouncedSaveTimeout) {
+    clearTimeout(debouncedSaveTimeout);
+  }
+
+  return new Promise((resolve) => {
+    debouncedSaveTimeout = setTimeout(async () => {
+      debouncedSaveTimeout = null;
+      const toSave = { ...pendingConfigPayload };
+      pendingConfigPayload = {};
+      try {
+        await saveAppSettings(toSave);
+      } finally {
+        resolve();
+      }
+    }, delayMs);
+  });
+}
+
+/**
+ * Immediately flushes any pending debounced settings writes to Supabase.
+ */
+export async function flushAppSettingsSave(): Promise<void> {
+  if (debouncedSaveTimeout) {
+    clearTimeout(debouncedSaveTimeout);
+    debouncedSaveTimeout = null;
+  }
+
+  if (pendingConfigPayload.gatewayConfig || pendingConfigPayload.settings) {
+    const toSave = { ...pendingConfigPayload };
+    pendingConfigPayload = {};
+    await saveAppSettings(toSave);
+  }
+}
+
+

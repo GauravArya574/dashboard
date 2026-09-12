@@ -1,6 +1,34 @@
 import { GatewayConfig, NetworkMode } from '../types';
 
 /**
+ * Normalizes a subnet prefix or gateway IP into a standard 3-octet prefix (e.g., "192.168.0.")
+ */
+export function normalizeSubnetPrefix(input?: string): string {
+  if (!input || !input.trim()) return '192.168.0.';
+  const cleaned = input
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .split('/')[0]
+    .replace(/\.x$/i, '.')
+    .replace(/\*$/, '');
+
+  const parts = cleaned.split('.').filter(Boolean);
+  if (parts.length >= 3) {
+    return `${parts[0]}.${parts[1]}.${parts[2]}.`;
+  }
+  return cleaned.endsWith('.') ? cleaned : `${cleaned}.`;
+}
+
+/**
+ * Checks if a given IP belongs to the specified subnet prefix
+ */
+export function isIpInSubnetRange(ip?: string, subnetPrefix?: string): boolean {
+  if (!ip || !subnetPrefix) return false;
+  const targetPrefix = normalizeSubnetPrefix(subnetPrefix);
+  return ip.trim().startsWith(targetPrefix);
+}
+
+/**
  * Attempts to extract local IPv4 network interface addresses via WebRTC ICE Candidates.
  */
 export async function detectLocalIpViaWebRTC(): Promise<string | null> {
@@ -34,10 +62,10 @@ export async function detectLocalIpViaWebRTC(): Promise<string | null> {
         }
       };
 
-      // Timeout after 1.8 seconds if WebRTC is blocked or mDNS masked
+      // Timeout after 1.5 seconds if WebRTC is blocked or mDNS masked
       const timer = setTimeout(() => {
         finish(detectedIp);
-      }, 1800);
+      }, 1500);
 
       pc.createDataChannel('gateway-detect');
 
@@ -80,18 +108,25 @@ export async function detectLocalIpViaWebRTC(): Promise<string | null> {
 
 /**
  * Derives the typical default gateway IP from a local device IP
- * e.g., "192.168.1.145" -> "192.168.1.1", "10.0.0.32" -> "10.0.0.1"
+ * e.g., "192.168.0.145" -> "192.168.0.1", "10.0.0.32" -> "10.0.0.1"
  */
-export function deriveGatewayFromIp(localIp: string): string {
+export function deriveGatewayFromIp(localIp: string, preferredGateway?: string): string {
+  if (preferredGateway && preferredGateway.trim()) {
+    const prefPrefix = normalizeSubnetPrefix(preferredGateway);
+    if (localIp.startsWith(prefPrefix)) {
+      return preferredGateway.trim();
+    }
+  }
+
   const parts = localIp.split('.');
   if (parts.length === 4) {
     return `${parts[0]}.${parts[1]}.${parts[2]}.1`;
   }
-  return '192.168.1.1';
+  return '192.168.0.1';
 }
 
 /**
- * Checks connectivity to a local gateway or host via lightweight image probe or fetch
+ * Checks connectivity to a local gateway or host via multi-vector fetch & image timing probe
  */
 export async function probeHostReachable(
   hostUrl: string,
@@ -114,48 +149,57 @@ export async function probeHostReachable(
       cleanupAndResolve(false);
     }, timeoutMs);
 
-    // 1. Try Image Probe (works across origins without CORS blocking errors crashing scripts)
-    const img = new Image();
-    const cleanUrl = hostUrl.replace(/\/+$/, '');
-    img.src = `${cleanUrl}/favicon.ico?_t=${Date.now()}`;
+    let cleanUrl = hostUrl.trim().replace(/\/+$/, '');
+    if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+      cleanUrl = `http://${cleanUrl}`;
+    }
 
-    img.onload = () => {
-      clearTimeout(timer);
-      cleanupAndResolve(true);
-    };
-
-    img.onerror = () => {
-      clearTimeout(timer);
-      // If error triggered quickly (< timeout), it usually means TCP port responded / rejected (device is online!)
-      const timeElapsed = performance.now() - startTime;
-      if (timeElapsed < timeoutMs - 50) {
+    // 1. Vector 1: Image DOM Element Probe (Favicon & root)
+    try {
+      const img = new Image();
+      img.onload = () => {
+        clearTimeout(timer);
         cleanupAndResolve(true);
-      } else {
-        cleanupAndResolve(false);
-      }
-    };
+      };
+      img.onerror = () => {
+        // When server sends 404/200 HTML or closes socket, onerror fires quickly (< 800ms) on LAN
+        const elapsed = performance.now() - startTime;
+        if (elapsed < timeoutMs - 200) {
+          clearTimeout(timer);
+          cleanupAndResolve(true);
+        }
+      };
+      img.src = `${cleanUrl}/favicon.ico?_t=${Date.now()}`;
+    } catch {
+      // Ignore
+    }
 
-    // 2. Parallel Fetch Probe with AbortController
+    // 2. Vector 2: Fetch Probe in no-cors mode
     if (typeof fetch !== 'undefined') {
       const controller = new AbortController();
       const fetchTimer = setTimeout(() => controller.abort(), timeoutMs);
 
-      fetch(hostUrl, {
+      fetch(cleanUrl, {
         method: 'GET',
         mode: 'no-cors',
+        cache: 'no-store',
+        credentials: 'omit',
         signal: controller.signal,
       })
         .then(() => {
+          // Opaque response received -> socket is alive and answered
           clearTimeout(fetchTimer);
           clearTimeout(timer);
           cleanupAndResolve(true);
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           clearTimeout(fetchTimer);
-          // If aborted by timeout -> offline. If TypeError due to network/CORS but before timeout -> reachable device!
-          if (err.name !== 'AbortError') {
-            const timeElapsed = performance.now() - startTime;
-            if (timeElapsed < timeoutMs - 80) {
+          const errorObj = err as { name?: string };
+          // If aborted due to timeout -> offline. If TypeError occurs quickly before timeout -> local network host responded
+          if (errorObj?.name !== 'AbortError') {
+            const elapsed = performance.now() - startTime;
+            if (elapsed < timeoutMs - 250) {
+              clearTimeout(timer);
               cleanupAndResolve(true);
             }
           }
@@ -165,99 +209,18 @@ export async function probeHostReachable(
 }
 
 /**
- * Full Gateway and Home Wi-Fi Detection Routine
- */
-export async function performGatewayDetection(
-  config: GatewayConfig
-): Promise<Partial<GatewayConfig>> {
-  let isHome = false;
-  let detectedIp: string | undefined;
-  let detectedGateway: string | undefined;
-  let latency: number | undefined;
-  let method: GatewayConfig['detectionMethod'] = 'probe';
-
-  // 1. WebRTC Local IP scan
-  try {
-    const webrtcIp = await detectLocalIpViaWebRTC();
-    if (webrtcIp) {
-      detectedIp = webrtcIp;
-      detectedGateway = deriveGatewayFromIp(webrtcIp);
-      method = 'webrtc';
-
-      // Check if matches configured Home subnet
-      if (
-        (config.homeSubnetPrefix && webrtcIp.startsWith(config.homeSubnetPrefix)) ||
-        (config.homeGatewayIp && detectedGateway === config.homeGatewayIp)
-      ) {
-        isHome = true;
-      }
-    }
-  } catch {
-    // Continue to next probe method
-  }
-
-  // 2. Local Gateway HTTP / Image Probe
-  const targetProbeHost = config.probeLocalHost || `http://${config.homeGatewayIp || '192.168.1.1'}`;
-  try {
-    const probeResult = await probeHostReachable(targetProbeHost, 2000);
-    latency = probeResult.latencyMs;
-
-    if (probeResult.reachable) {
-      isHome = true;
-      method = detectedIp ? 'hybrid' : 'probe';
-      if (!detectedGateway) {
-        detectedGateway = config.homeGatewayIp || '192.168.1.1';
-      }
-    }
-  } catch {
-    // Ignore probe failures
-  }
-
-  // 3. Server-side Network API check
-  if (!isHome) {
-    try {
-      const resp = await fetch('/api/network-detect');
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.isPrivateIp) {
-          isHome = true;
-          detectedIp = detectedIp || data.clientIp;
-          detectedGateway = detectedGateway || (data.clientIp ? deriveGatewayFromIp(data.clientIp) : '192.168.1.1');
-          method = 'server';
-        }
-      }
-    } catch {
-      // Ignore
-    }
-  }
-
-  return {
-    isHomeWifiDetected: isHome,
-    detectedGateway: detectedGateway || config.homeGatewayIp || '192.168.1.1',
-    detectedLocalIp: detectedIp || (isHome ? `${config.homeGatewayIp.slice(0, -1)}100` : undefined),
-    probeLatencyMs: latency,
-    detectionMethod: method,
-    lastDetectedAt: Date.now(),
-  };
-}
-
-/**
- * Returns the active URL for a service based on current network mode and detected environment
+ * Returns the active URL for a service based on current network mode (Home LAN vs Remote WAN)
+ * Remote WAN is the default.
  */
 export function getActiveServiceUrl(
   service: { localUrl: string; remoteUrl: string },
   mode: NetworkMode,
-  isHomeDetected: boolean
+  _isHomeDetected?: boolean
 ): { url: string; isLocal: boolean; label: 'LAN' | 'WAN' } {
   if (mode === 'home') {
     return { url: service.localUrl || service.remoteUrl, isLocal: true, label: 'LAN' };
   }
-  if (mode === 'remote') {
-    return { url: service.remoteUrl || service.localUrl, isLocal: false, label: 'WAN' };
-  }
-  // Auto mode
-  if (isHomeDetected) {
-    return { url: service.localUrl || service.remoteUrl, isLocal: true, label: 'LAN' };
-  }
+  // Default: WAN / Remote mode
   return { url: service.remoteUrl || service.localUrl, isLocal: false, label: 'WAN' };
 }
+

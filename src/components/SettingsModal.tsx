@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { 
   X, 
   Settings as SettingsIcon, 
@@ -9,7 +9,11 @@ import {
   ExternalLink,
   ShieldCheck,
   CheckCircle,
-  FileJson
+  FileJson,
+  Image as ImageIcon,
+  Trash2,
+  Link,
+  Sparkles
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { DashboardSettings, DockerService } from '../types';
@@ -34,8 +38,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onResetDefaultServices,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const bgFileInputRef = useRef<HTMLInputElement>(null);
 
-  const [importStatus, setImportStatus] = React.useState<{ success: boolean; message: string } | null>(null);
+  const [importStatus, setImportStatus] = useState<{ success: boolean; message: string } | null>(null);
+  const [imageUrlInput, setImageUrlInput] = useState('');
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
 
   if (!isOpen) return null;
 
@@ -77,11 +84,70 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         } else {
           setImportStatus({ success: false, message: 'Invalid backup format. Expected a JSON file with services list.' });
         }
-      } catch (err) {
+      } catch {
         setImportStatus({ success: false, message: 'Failed to parse backup JSON file.' });
       }
     };
     reader.readAsText(file);
+  };
+
+  // Helper to compress uploaded images on canvas before storing Base64 URL
+  const handleImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsProcessingImage(true);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        // Max dimension 1920px for crisp high-def display while keeping data payload lightweight
+        const maxDim = 1920;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          onUpdateSettings({ backgroundImage: compressedDataUrl });
+        } else {
+          onUpdateSettings({ backgroundImage: event.target?.result as string });
+        }
+        setIsProcessingImage(false);
+      };
+      img.onerror = () => {
+        onUpdateSettings({ backgroundImage: event.target?.result as string });
+        setIsProcessingImage(false);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleApplyUrl = () => {
+    if (imageUrlInput.trim()) {
+      onUpdateSettings({ backgroundImage: imageUrlInput.trim() });
+      setImageUrlInput('');
+    }
+  };
+
+  const handleRemoveBackground = () => {
+    onUpdateSettings({ backgroundImage: '' });
   };
 
   return (
@@ -114,7 +180,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 Dashboard Settings & Backup
               </h2>
               <p className="text-xs text-slate-400">
-                Configure auto-refresh rates, view options, and backup homelab data
+                Customize wallpaper, refresh rates, and sync options via Supabase
               </p>
             </div>
           </div>
@@ -128,8 +194,91 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* Content */}
         <div className="flex-1 p-6 space-y-6 overflow-y-auto">
+          {/* Background Image Settings */}
+          <div className="space-y-3">
+            <label className="block text-xs font-semibold uppercase text-slate-400">
+              Dashboard Background Image
+            </label>
+
+            {/* Current Background Preview */}
+            {settings.backgroundImage ? (
+              <div className="relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 flex items-center gap-3">
+                <div className="relative w-24 h-16 rounded-xl overflow-hidden shrink-0 border border-slate-800">
+                  <img
+                    src={settings.backgroundImage}
+                    alt="Background Preview"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-slate-200">
+                    <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>Custom Image Active</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                    Saved and synchronized across all devices via Supabase.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRemoveBackground}
+                  title="Remove Custom Background"
+                  className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 transition-colors shrink-0"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <div className="p-3.5 rounded-2xl border border-dashed border-slate-800 bg-slate-950/40 text-center">
+                <p className="text-xs text-slate-400">No custom background image uploaded (using default gradient theme).</p>
+              </div>
+            )}
+
+            {/* Upload & Image URL Controls */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                disabled={isProcessingImage}
+                onClick={() => bgFileInputRef.current?.click()}
+                className="flex items-center justify-center gap-2 p-3 rounded-xl bg-indigo-600/15 hover:bg-indigo-600/25 border border-indigo-500/30 text-xs font-medium text-indigo-200 transition-colors disabled:opacity-50"
+              >
+                {isProcessingImage ? (
+                  <RefreshCw className="w-4 h-4 text-indigo-400 animate-spin" />
+                ) : (
+                  <ImageIcon className="w-4 h-4 text-indigo-400" />
+                )}
+                <span>{isProcessingImage ? 'Optimizing Image...' : 'Upload Image File'}</span>
+              </button>
+              <input
+                type="file"
+                ref={bgFileInputRef}
+                onChange={handleImageFileUpload}
+                accept="image/*"
+                className="hidden"
+              />
+
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={imageUrlInput}
+                  onChange={(e) => setImageUrlInput(e.target.value)}
+                  placeholder="https://... (Image URL)"
+                  className="flex-1 px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-500 focus:border-indigo-500 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleApplyUrl}
+                  disabled={!imageUrlInput.trim()}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-semibold text-slate-200 transition-colors"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Auto Refresh Interval */}
-          <div>
+          <div className="pt-2">
             <label className="block text-xs font-semibold uppercase text-slate-400 mb-2">
               Status Auto-Refresh Interval
             </label>
@@ -150,7 +299,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               ))}
             </div>
             <p className="text-[11px] text-slate-500 mt-1.5">
-              How often the dashboard pings remote URLs to test availability and update the green/red dot indicators.
+              How often the dashboard pings remote URLs to test availability and update status indicators.
             </p>
           </div>
 

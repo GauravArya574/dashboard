@@ -35,7 +35,7 @@ import {
 } from './types';
 import { AnimatePresence, motion } from 'motion/react';
 import { DEFAULT_SERVICES } from './data/defaultServices';
-import { performGatewayDetection, getActiveServiceUrl } from './utils/networkDetector';
+import { getActiveServiceUrl } from './utils/networkDetector';
 import { pingService } from './utils/healthChecker';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { 
@@ -45,27 +45,25 @@ import {
   deleteService, 
   batchUpsertServices,
   clearAllServices,
+  fetchAppSettings,
+  saveAppSettings,
+  debouncedSaveAppSettings,
+  flushAppSettingsSave,
   DatabaseServiceRow,
   mapRowToService 
 } from './lib/services';
 import { Navbar } from './components/Navbar';
 import { ServiceCard } from './components/ServiceCard';
 import { SortableServiceCard } from './components/SortableServiceCard';
-import { GatewaySettingsModal } from './components/GatewaySettingsModal';
 import { ServiceModal } from './components/ServiceModal';
 import { SettingsModal } from './components/SettingsModal';
 
 const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
-  mode: 'auto',
-  homeGatewayIp: '192.168.1.1',
-  homeSubnetPrefix: '192.168.1.',
-  probeLocalHost: 'http://192.168.1.1',
+  mode: 'remote',
+  homeGatewayIp: '192.168.0.1',
+  homeSubnetPrefix: '192.168.0.',
+  probeLocalHost: 'http://192.168.0.1',
   pingIntervalSeconds: 5,
-  isHomeWifiDetected: true,
-  lastDetectedAt: Date.now(),
-  detectionMethod: 'probe',
-  autoDetectEnabled: true,
-  probeLatencyMs: 14,
 };
 
 const DEFAULT_SETTINGS: DashboardSettings = {
@@ -95,7 +93,6 @@ export default function App() {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
 
   // 5. Modals & Reorder Mode
-  const [isGatewayModalOpen, setIsGatewayModalOpen] = useState(false);
   const [isServiceModalOpen, setIsServiceModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [serviceToEdit, setServiceToEdit] = useState<DockerService | null>(null);
@@ -113,7 +110,7 @@ export default function App() {
     })
   );
 
-  // Fetch Services directly from Supabase (Strictly no localStorage)
+  // Fetch Services & App Settings directly from Supabase (Strictly no localStorage)
   const loadServicesFromDb = useCallback(async () => {
     setIsLoadingServices(true);
     setDbError(null);
@@ -127,8 +124,26 @@ export default function App() {
     }
 
     try {
+      // 1. Load Services
       const fetched = await fetchServices();
       setServices(fetched);
+
+      // 2. Load App Gateway Config & Settings from Supabase
+      const appSettings = await fetchAppSettings();
+      if (appSettings) {
+        if (appSettings.gatewayConfig) {
+          setGatewayConfig((prev) => ({
+            ...prev,
+            ...appSettings.gatewayConfig,
+          }));
+        }
+        if (appSettings.settings) {
+          setSettings((prev) => ({
+            ...prev,
+            ...appSettings.settings,
+          }));
+        }
+      }
     } catch (err: unknown) {
       let errorMsg = 'Failed to connect to Supabase database.';
       if (err instanceof Error) {
@@ -220,19 +235,6 @@ export default function App() {
     }
   }, [settings.theme]);
 
-  // Gateway Probe Routine
-  const triggerGatewayDetection = useCallback(async () => {
-    try {
-      const detected = await performGatewayDetection(gatewayConfig);
-      setGatewayConfig((prev) => ({
-        ...prev,
-        ...detected,
-      }));
-    } catch (err) {
-      console.warn('Gateway detection failed:', err);
-    }
-  }, [gatewayConfig]);
-
   // Single Service Health Probe
   const probeSingleService = useCallback(
     async (service: DockerService) => {
@@ -273,17 +275,12 @@ export default function App() {
     setIsRefreshing(false);
   }, [isRefreshing, services]);
 
-  // Initial Gateway detection
-  useEffect(() => {
-    triggerGatewayDetection();
-  }, [triggerGatewayDetection]);
-
   // Run probe once services are fetched or network mode changes
   useEffect(() => {
     if (services.length > 0) {
       refreshAllStatuses();
     }
-  }, [services.length, gatewayConfig.mode, gatewayConfig.isHomeWifiDetected]);
+  }, [services.length, gatewayConfig.mode]);
 
   // Auto-refresh interval
   useEffect(() => {
@@ -398,37 +395,34 @@ export default function App() {
   };
 
   const handleSetNetworkMode = (mode: NetworkMode) => {
-    setGatewayConfig((prev) => ({ ...prev, mode }));
+    setGatewayConfig((prev) => {
+      const updated = { ...prev, mode };
+      saveAppSettings({ gatewayConfig: updated });
+      return updated;
+    });
   };
 
   return (
     <div className="relative min-h-screen w-full overflow-x-hidden bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
-      {/* Dynamic Aurora Video Background */}
+      {/* Custom Image or Default Gradient Background */}
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none select-none">
-        <video
-          autoPlay
-          loop
-          muted
-          playsInline
-          preload="auto"
-          ref={(el) => {
-            if (el && el.paused) {
-              el.play().catch(() => {});
-            }
-          }}
-          className="absolute inset-0 w-full h-full object-cover object-center brightness-[0.75] contrast-[1.05] saturate-[1.15]"
-        >
-          <source src="/aurora-bg.mp4" type="video/mp4" />
-        </video>
-        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/40 via-slate-950/15 to-slate-950/70" />
-        <div className="absolute inset-0 bg-slate-950/20 backdrop-brightness-90" />
+        {settings.backgroundImage ? (
+          <img
+            src={settings.backgroundImage}
+            alt="Custom Dashboard Background"
+            className="absolute inset-0 w-full h-full object-cover object-center brightness-[0.8] contrast-[1.05]"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-slate-950" />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/50 via-slate-950/20 to-slate-950/80" />
+        <div className="absolute inset-0 bg-slate-950/20 backdrop-brightness-95" />
       </div>
 
       {/* Top Bar with Wi-Fi Status Indicator */}
       <div className="relative z-40">
         <Navbar
           gatewayConfig={gatewayConfig}
-          onOpenGatewayModal={() => setIsGatewayModalOpen(true)}
           onOpenSettingsModal={() => setIsSettingsModalOpen(true)}
           onRefreshAll={refreshAllStatuses}
           isRefreshing={isRefreshing}
@@ -595,19 +589,6 @@ export default function App() {
 
       {/* Modals */}
       <AnimatePresence mode="wait">
-        {isGatewayModalOpen && (
-          <GatewaySettingsModal
-            key="gateway-modal"
-            isOpen={isGatewayModalOpen}
-            onClose={() => setIsGatewayModalOpen(false)}
-            config={gatewayConfig}
-            onSaveConfig={(newConfig) => {
-              setGatewayConfig(newConfig);
-              refreshAllStatuses();
-            }}
-          />
-        )}
-
         {isServiceModalOpen && (
           <ServiceModal
             key="service-modal"
@@ -628,7 +609,13 @@ export default function App() {
             isOpen={isSettingsModalOpen}
             onClose={() => setIsSettingsModalOpen(false)}
             settings={settings}
-            onUpdateSettings={(newSettings) => setSettings((prev) => ({ ...prev, ...newSettings }))}
+            onUpdateSettings={(newSettings) => {
+              setSettings((prev) => {
+                const updated = { ...prev, ...newSettings };
+                debouncedSaveAppSettings({ settings: updated }, 400);
+                return updated;
+              });
+            }}
             services={services}
             onImportServices={handleImportServices}
             onResetDefaultServices={handleResetServices}
