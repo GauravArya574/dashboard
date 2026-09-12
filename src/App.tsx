@@ -154,7 +154,8 @@ export default function App() {
         errorMsg = anyErr.message || anyErr.details || anyErr.hint || JSON.stringify(err);
       }
       console.error('Failed to load services from Supabase:', err);
-      setDbError(errorMsg);
+      setServices(DEFAULT_SERVICES);
+      setDbError(`${errorMsg} (Loaded default services as fallback)`);
     } finally {
       setIsLoadingServices(false);
     }
