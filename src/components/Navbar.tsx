@@ -3,10 +3,7 @@ import {
   Server, 
   Wifi, 
   Globe, 
-  RefreshCw, 
-  Settings as SettingsIcon, 
-  Pause, 
-  Play
+  Settings as SettingsIcon 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GatewayConfig, NetworkMode } from '../types';
@@ -14,20 +11,12 @@ import { GatewayConfig, NetworkMode } from '../types';
 interface NavbarProps {
   gatewayConfig: GatewayConfig;
   onOpenSettingsModal: () => void;
-  onRefreshAll: () => void;
-  isRefreshing: boolean;
-  autoRefreshEnabled: boolean;
-  onToggleAutoRefresh: () => void;
   onSetNetworkMode: (mode: NetworkMode) => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   gatewayConfig,
   onOpenSettingsModal,
-  onRefreshAll,
-  isRefreshing,
-  autoRefreshEnabled,
-  onToggleAutoRefresh,
   onSetNetworkMode,
 }) => {
   const isHomeActive = gatewayConfig.mode === 'home';
@@ -47,14 +36,6 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="flex items-center gap-3">
           <div className="relative flex items-center justify-center w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-emerald-500/20 border border-slate-700/60 shadow-inner">
             <Server className="w-5 h-5 text-indigo-400" />
-            <span
-              className={`absolute -top-1 -right-1 flex h-3 w-3 ${
-                isHomeActive ? 'text-emerald-400' : 'text-sky-400'
-              }`}
-            >
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-current"></span>
-            </span>
           </div>
           <div>
             <h1 className="font-bold text-base sm:text-lg text-slate-100 tracking-tight leading-tight">
@@ -106,33 +87,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                   )}
                 </motion.div>
               </AnimatePresence>
-            </button>
-          </div>
-
-          {/* Refresh Action */}
-          <div className="flex items-center bg-slate-900/60 border border-slate-700/50 backdrop-blur-md rounded-2xl p-1 gap-0.5">
-            <button
-              onClick={onRefreshAll}
-              disabled={isRefreshing}
-              title="Refresh service status now"
-              className="p-2 rounded-xl text-slate-400 hover:text-indigo-400 hover:bg-slate-800/70 transition-colors disabled:opacity-50"
-            >
-              <RefreshCw
-                className={`w-4 h-4 text-indigo-400 ${
-                  isRefreshing ? 'animate-spin' : ''
-                }`}
-              />
-            </button>
-            <button
-              onClick={onToggleAutoRefresh}
-              title={autoRefreshEnabled ? 'Pause auto status refresh' : 'Resume auto status refresh'}
-              className="p-2 rounded-xl text-slate-400 hover:text-slate-200 hover:bg-slate-800/70 transition-colors hidden sm:block"
-            >
-              {autoRefreshEnabled ? (
-                <Pause className="w-3.5 h-3.5 text-amber-400/80" />
-              ) : (
-                <Play className="w-3.5 h-3.5 text-slate-400" />
-              )}
             </button>
           </div>
 

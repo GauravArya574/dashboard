@@ -2,12 +2,11 @@ import React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
-import { DockerService, ServiceStatus, NetworkMode } from '../types';
+import { DockerService, NetworkMode } from '../types';
 import { ServiceCard } from './ServiceCard';
 
 interface SortableServiceCardProps {
   service: DockerService;
-  status?: ServiceStatus;
   networkMode: NetworkMode;
   isHomeWifiDetected: boolean;
   openInNewTab: boolean;
@@ -17,7 +16,6 @@ interface SortableServiceCardProps {
 
 export const SortableServiceCard: React.FC<SortableServiceCardProps> = ({
   service,
-  status,
   networkMode,
   isHomeWifiDetected,
   openInNewTab,
@@ -65,7 +63,6 @@ export const SortableServiceCard: React.FC<SortableServiceCardProps> = ({
 
       <ServiceCard
         service={service}
-        status={status}
         networkMode={networkMode}
         isHomeWifiDetected={isHomeWifiDetected}
         openInNewTab={openInNewTab}

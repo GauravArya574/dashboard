@@ -1,11 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Server } from 'lucide-react';
-import { DockerService, ServiceStatus, NetworkMode } from '../types';
+import { DockerService, NetworkMode } from '../types';
 import { getActiveServiceUrl } from '../utils/networkDetector';
 
 interface ServiceCardProps {
   service: DockerService;
-  status?: ServiceStatus;
   networkMode: NetworkMode;
   isHomeWifiDetected: boolean;
   openInNewTab: boolean;
@@ -15,7 +14,6 @@ interface ServiceCardProps {
 
 export const ServiceCard: React.FC<ServiceCardProps> = ({
   service,
-  status,
   networkMode,
   isHomeWifiDetected,
   openInNewTab,
@@ -30,28 +28,11 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
 
   const lastTouchTimeRef = useRef(0);
 
-  const { url: activeUrl, isLocal } = getActiveServiceUrl(
+  const { url: activeUrl } = getActiveServiceUrl(
     service,
     networkMode,
     isHomeWifiDetected
   );
-
-  // Status indicators: green for online, red for offline, gray for checking
-  const isOnline = status?.state === 'online' || status?.state === 'degraded';
-  const isChecking = status?.state === 'checking';
-
-  // Dot color styling: green / red / gray
-  const dotClass = isOnline
-    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)] ring-emerald-500/30'
-    : isChecking
-    ? 'bg-slate-400 animate-pulse'
-    : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.9)] ring-rose-500/30';
-
-  const statusLabel = isOnline
-    ? 'Online'
-    : isChecking
-    ? 'Checking...'
-    : 'Offline';
 
   const navigateToService = () => {
     if (!activeUrl) return;
@@ -146,7 +127,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
     <div
       id={`service-item-${service.id}`}
       className="group relative flex flex-col items-center justify-start cursor-pointer select-none py-2 w-full max-w-[96px] sm:max-w-[116px] md:max-w-[128px]"
-      title={`${service.name} (Remote URL: ${service.remoteUrl || 'N/A'})\nAvailability: ${statusLabel}${status?.latencyMs ? ` (${status.latencyMs}ms)` : ''}\nClick to open, hold to edit`}
+      title={`${service.name} (Remote URL: ${service.remoteUrl || 'N/A'})\nClick to open, hold to edit`}
       onContextMenu={(e) => {
         e.preventDefault();
         onEdit(service);
@@ -191,16 +172,6 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             <Server className="w-14 h-14 sm:w-16 sm:h-16" />
           </div>
         )}
-
-        {/* Green/Red Dot Indicator positioned relative to the icon image */}
-        <span
-          className="absolute top-0 right-0 flex items-center justify-center pointer-events-none z-20"
-          title={`Status: ${statusLabel}${status?.latencyMs ? ` (${status.latencyMs}ms)` : ''}${status?.statusCode ? ` [HTTP ${status.statusCode}]` : ''}${status?.message ? ` - ${status.message}` : ''}`}
-        >
-          <span
-            className={`w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border-2 border-slate-950 ring-1 ${dotClass} transition-all duration-300 shadow-md group-hover:scale-110`}
-          />
-        </span>
       </div>
 
       {/* Name underneath image */}

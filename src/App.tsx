@@ -28,7 +28,6 @@ import {
 } from '@dnd-kit/sortable';
 import { 
   DockerService, 
-  ServiceStatus, 
   GatewayConfig, 
   DashboardSettings, 
   NetworkMode
@@ -36,7 +35,6 @@ import {
 import { AnimatePresence, motion } from 'motion/react';
 import { DEFAULT_SERVICES } from './data/defaultServices';
 import { getActiveServiceUrl } from './utils/networkDetector';
-import { pingService } from './utils/healthChecker';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { 
   fetchServices, 
@@ -63,12 +61,10 @@ const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
   homeGatewayIp: '192.168.0.1',
   homeSubnetPrefix: '192.168.0.',
   probeLocalHost: 'http://192.168.0.1',
-  pingIntervalSeconds: 5,
 };
 
 const DEFAULT_SETTINGS: DashboardSettings = {
   theme: 'dark',
-  refreshIntervalSeconds: 5,
   openInNewTab: true,
   customTitle: 'Homelab Docker',
   customSubtitle: 'Self-hosted Service Directory',
@@ -87,12 +83,7 @@ export default function App() {
   // 3. Settings State (In-Memory Runtime)
   const [settings, setSettings] = useState<DashboardSettings>(DEFAULT_SETTINGS);
 
-  // 4. Live Health & Refresh State (Runtime only, not stored in DB)
-  const [serviceStatuses, setServiceStatuses] = useState<Record<string, ServiceStatus>>({});
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
-
-  // 5. Modals & Reorder Mode
+  // 4. Modals & Reorder Mode
   const [isServiceModalOpen, setIsServiceModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [serviceToEdit, setServiceToEdit] = useState<DockerService | null>(null);
@@ -117,9 +108,8 @@ export default function App() {
 
     if (!isSupabaseConfigured || !supabase) {
       setIsLoadingServices(false);
-      setServices(DEFAULT_SERVICES);
       setDbError(
-        'Supabase env variables (VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY) are not set. Displaying default services.'
+        'Supabase is not configured. Please define VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.'
       );
       return;
     }
@@ -127,7 +117,7 @@ export default function App() {
     try {
       // 1. Load Services
       const fetched = await fetchServices();
-      setServices(fetched.length > 0 ? fetched : DEFAULT_SERVICES);
+      setServices(fetched);
 
       // 2. Load App Gateway Config & Settings from Supabase
       const appSettings = await fetchAppSettings();
@@ -154,8 +144,7 @@ export default function App() {
         errorMsg = anyErr.message || anyErr.details || anyErr.hint || JSON.stringify(err);
       }
       console.error('Failed to load services from Supabase:', err);
-      setServices(DEFAULT_SERVICES);
-      setDbError(`${errorMsg} (Loaded default services as fallback)`);
+      setDbError(errorMsg);
     } finally {
       setIsLoadingServices(false);
     }
@@ -237,64 +226,6 @@ export default function App() {
     }
   }, [settings.theme]);
 
-  // Single Service Health Probe
-  const probeSingleService = useCallback(
-    async (service: DockerService) => {
-      setServiceStatuses((prev) => ({
-        ...prev,
-        [service.id]: {
-          serviceId: service.id,
-          state: 'checking',
-          lastChecked: Date.now(),
-        },
-      }));
-
-      const status = await pingService(service, settings.pingProxyUrl);
-
-      setServiceStatuses((prev) => ({
-        ...prev,
-        [service.id]: status,
-      }));
-    },
-    []
-  );
-
-  // Refresh All Services Health simultaneously
-  const refreshAllStatuses = useCallback(async () => {
-    if (isRefreshing || services.length === 0) return;
-    setIsRefreshing(true);
-
-    await Promise.all(
-      services.map(async (svc) => {
-        const status = await pingService(svc, settings.pingProxyUrl);
-        setServiceStatuses((prev) => ({
-          ...prev,
-          [svc.id]: status,
-        }));
-      })
-    );
-
-    setIsRefreshing(false);
-  }, [isRefreshing, services]);
-
-  // Run probe once services are fetched or network mode changes
-  useEffect(() => {
-    if (services.length > 0) {
-      refreshAllStatuses();
-    }
-  }, [services.length, gatewayConfig.mode]);
-
-  // Auto-refresh interval
-  useEffect(() => {
-    if (!autoRefreshEnabled || services.length === 0) return;
-
-    const interval = setInterval(() => {
-      refreshAllStatuses();
-    }, settings.refreshIntervalSeconds * 1000);
-
-    return () => clearInterval(interval);
-  }, [autoRefreshEnabled, settings.refreshIntervalSeconds, refreshAllStatuses, services.length]);
-
   // Service CRUD handlers: Direct Database Operations with optimistic fallback & error prevention
   const handleSaveService = async (service: DockerService) => {
     setDbError(null);
@@ -318,7 +249,6 @@ export default function App() {
           }
           return [...prev, savedService];
         });
-        setTimeout(() => probeSingleService(savedService), 100);
       } else {
         // Unconfigured Supabase: preserve locally
         setServices((prev) => {
@@ -330,7 +260,6 @@ export default function App() {
           }
           return [...prev, service];
         });
-        setTimeout(() => probeSingleService(service), 100);
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to save service to Supabase.';
@@ -364,7 +293,6 @@ export default function App() {
       } else {
         setServices(importedList);
       }
-      refreshAllStatuses();
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to import services into Supabase.';
       console.error('Error in handleImportServices:', err);
@@ -426,10 +354,6 @@ export default function App() {
         <Navbar
           gatewayConfig={gatewayConfig}
           onOpenSettingsModal={() => setIsSettingsModalOpen(true)}
-          onRefreshAll={refreshAllStatuses}
-          isRefreshing={isRefreshing}
-          autoRefreshEnabled={autoRefreshEnabled}
-          onToggleAutoRefresh={() => setAutoRefreshEnabled(!autoRefreshEnabled)}
           onSetNetworkMode={handleSetNetworkMode}
         />
       </div>
@@ -509,7 +433,6 @@ export default function App() {
                   <SortableServiceCard
                     key={service.id}
                     service={service}
-                    status={serviceStatuses[service.id]}
                     networkMode={gatewayConfig.mode}
                     isHomeWifiDetected={gatewayConfig.isHomeWifiDetected}
                     openInNewTab={settings.openInNewTab}

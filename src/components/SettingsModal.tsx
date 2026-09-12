@@ -13,8 +13,7 @@ import {
   Image as ImageIcon,
   Trash2,
   Link,
-  Sparkles,
-  Globe
+  Sparkles
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { DashboardSettings, DockerService } from '../types';
@@ -181,7 +180,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 Dashboard Settings & Backup
               </h2>
               <p className="text-xs text-slate-400">
-                Customize wallpaper, refresh rates, and sync options via Supabase
+                Customize wallpaper and sync options via Supabase
               </p>
             </div>
           </div>
@@ -275,67 +274,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   Apply
                 </button>
               </div>
-            </div>
-          </div>
-
-          {/* Auto Refresh Interval */}
-          <div className="pt-2">
-            <label className="block text-xs font-semibold uppercase text-slate-400 mb-2">
-              Status Auto-Refresh Interval
-            </label>
-            <div className="grid grid-cols-4 gap-2">
-              {[5, 10, 15, 30].map((interval) => (
-                <button
-                  key={interval}
-                  type="button"
-                  onClick={() => onUpdateSettings({ refreshIntervalSeconds: interval })}
-                  className={`py-2 px-3 rounded-xl border text-xs font-medium transition-all ${
-                    settings.refreshIntervalSeconds === interval
-                      ? 'bg-indigo-600 border-indigo-500 text-white shadow-md'
-                      : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:border-slate-700'
-                  }`}
-                >
-                  {interval}s
-                </button>
-              ))}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1.5">
-              How often the dashboard pings remote URLs to test availability and update status indicators.
-            </p>
-          </div>
-
-          {/* Cloudflare Pages & Static Hosting Health Checker Config */}
-          <div className="space-y-3 pt-2">
-            <label className="block text-xs font-semibold uppercase text-slate-400">
-              Cloudflare Pages & Static Deployment Ping Settings
-            </label>
-
-            <div className="p-3.5 rounded-xl bg-slate-950/50 border border-slate-800 space-y-2">
-              <div className="flex items-center gap-2">
-                <Globe className="w-4 h-4 text-sky-400 shrink-0" />
-                <span className="text-xs font-medium text-slate-200">
-                  Cloudflare Functions Native Support
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Includes <code className="text-sky-300 bg-sky-950/60 px-1 py-0.5 rounded font-mono">functions/api/ping.ts</code>. When exported &amp; uploaded to Cloudflare Pages, health checks run natively on Cloudflare Workers edge nodes.
-              </p>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-slate-950/50 border border-slate-800 space-y-2">
-              <label className="text-xs font-medium text-slate-200 block">
-                Optional Ping Proxy URL (for pure static CDNs)
-              </label>
-              <input
-                type="text"
-                value={settings.pingProxyUrl || ''}
-                onChange={(e) => onUpdateSettings({ pingProxyUrl: e.target.value.trim() })}
-                placeholder="https://corsproxy.io/?"
-                className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-500 focus:border-indigo-500 outline-none"
-              />
-              <p className="text-[11px] text-slate-500">
-                Optional CORS/Ping Proxy URL used if hosting on static CDNs without serverless functions.
-              </p>
             </div>
           </div>
 

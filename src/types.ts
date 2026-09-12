@@ -4,20 +4,6 @@ export interface DockerService {
   icon: string; // URL to SVG or PNG icon
   localUrl: string; // e.g., "http://192.168.1.100:2283"
   remoteUrl: string; // e.g., "https://immich.mydomain.me"
-  healthEndpoint?: string; // Optional custom endpoint for status check
-}
-
-export type HealthState = 'online' | 'degraded' | 'offline' | 'checking' | 'unknown';
-
-export interface ServiceStatus {
-  serviceId: string;
-  state: HealthState;
-  statusCode?: number;
-  latencyMs?: number;
-  lastChecked: number;
-  uptimePercent?: number;
-  consecutiveFailures?: number;
-  message?: string;
 }
 
 export type NetworkMode = 'home' | 'remote';
@@ -27,18 +13,15 @@ export interface GatewayConfig {
   homeGatewayIp: string; // e.g., "192.168.1.1" or "10.0.0.1"
   homeSubnetPrefix: string; // e.g., "192.168.1." or "10.0.0."
   probeLocalHost: string; // e.g., "http://192.168.1.1" or local server IP
-  pingIntervalSeconds: number;
 }
 
 export interface DashboardSettings {
   theme: 'dark' | 'light' | 'system';
-  refreshIntervalSeconds: number; // 10, 15, 30, 60, 300
   openInNewTab: boolean;
   customTitle: string;
   customSubtitle: string;
   gatewayConfig: GatewayConfig;
   backgroundImage?: string; // Custom background image URL or Base64 Data URL
-  pingProxyUrl?: string; // Optional custom ping proxy URL for static hosting (e.g. Cloudflare Worker or CORS proxy)
 }
 
 export interface DockerHostMetrics {

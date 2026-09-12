@@ -22,7 +22,6 @@ export function mapRowToService(row: DatabaseServiceRow): DockerService {
     icon: row.icon,
     localUrl: row.local_url,
     remoteUrl: row.remote_url,
-    healthEndpoint: row.health_endpoint || undefined,
   };
 }
 
@@ -36,7 +35,7 @@ export function mapServiceToRow(service: DockerService): DatabaseServiceRow {
     icon: service.icon,
     local_url: service.localUrl,
     remote_url: service.remoteUrl,
-    health_endpoint: service.healthEndpoint || null,
+    health_endpoint: null,
     updated_at: new Date().toISOString(),
   };
 }
@@ -79,7 +78,7 @@ export async function createService(service: DockerService): Promise<DockerServi
     icon: service.icon,
     local_url: service.localUrl,
     remote_url: service.remoteUrl,
-    health_endpoint: service.healthEndpoint || null,
+    health_endpoint: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -111,7 +110,7 @@ export async function updateService(service: DockerService): Promise<DockerServi
     icon: service.icon,
     local_url: service.localUrl,
     remote_url: service.remoteUrl,
-    health_endpoint: service.healthEndpoint || null,
+    health_endpoint: null,
     updated_at: new Date().toISOString(),
   };
 
@@ -166,7 +165,7 @@ export async function batchUpsertServices(servicesList: DockerService[]): Promis
     icon: svc.icon,
     local_url: svc.localUrl,
     remote_url: svc.remoteUrl,
-    health_endpoint: svc.healthEndpoint || null,
+    health_endpoint: null,
     created_at: now,
     updated_at: now,
   }));
