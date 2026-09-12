@@ -38,6 +38,7 @@ export interface DashboardSettings {
   customSubtitle: string;
   gatewayConfig: GatewayConfig;
   backgroundImage?: string; // Custom background image URL or Base64 Data URL
+  pingProxyUrl?: string; // Optional custom ping proxy URL for static hosting (e.g. Cloudflare Worker or CORS proxy)
 }
 
 export interface DockerHostMetrics {

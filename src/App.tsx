@@ -247,7 +247,7 @@ export default function App() {
         },
       }));
 
-      const status = await pingService(service);
+      const status = await pingService(service, settings.pingProxyUrl);
 
       setServiceStatuses((prev) => ({
         ...prev,
@@ -264,7 +264,7 @@ export default function App() {
 
     await Promise.all(
       services.map(async (svc) => {
-        const status = await pingService(svc);
+        const status = await pingService(svc, settings.pingProxyUrl);
         setServiceStatuses((prev) => ({
           ...prev,
           [svc.id]: status,

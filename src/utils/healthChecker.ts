@@ -2,16 +2,48 @@ import { DockerService, ServiceStatus } from '../types';
 
 /**
  * Direct browser probe for standalone static hosting environments (e.g. Cloudflare Pages, Netlify, Vercel Static, S3).
- * Uses fetch with no-cors mode, falling back to favicon / image DOM probing.
- * In no-cors mode, a response (even opaque type 0) confirms network connectivity and active server socket.
+ * Uses fetch with no-cors mode, custom CORS proxy, falling back to DOM image probing.
  */
-async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): Promise<{
+async function probeDirectBrowser(
+  targetUrl: string,
+  timeoutMs: number = 4000,
+  pingProxyUrl?: string
+): Promise<{
   online: boolean;
   latency: number;
   statusCode?: number;
   message?: string;
 }> {
   const startTime = performance.now();
+  const isHttpsDashboard = typeof window !== 'undefined' && window.location.protocol === 'https:';
+  const isHttpTarget = targetUrl.startsWith('http://');
+
+  // If a custom CORS/ping proxy URL is configured in settings, route through it
+  if (pingProxyUrl?.trim()) {
+    try {
+      const proxyBase = pingProxyUrl.trim();
+      const fullProxyUrl = proxyBase.includes('{url}')
+        ? proxyBase.replace('{url}', encodeURIComponent(targetUrl))
+        : `${proxyBase.endsWith('/') || proxyBase.endsWith('?') ? proxyBase : proxyBase + '?'}${encodeURIComponent(targetUrl)}`;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      const res = await fetch(fullProxyUrl, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      const latency = Math.round(performance.now() - startTime);
+      if (res.ok) {
+        return { online: true, latency, statusCode: res.status, message: `Proxy HTTP ${res.status}` };
+      }
+    } catch {
+      // Fallback to direct browser probe if proxy attempt fails
+    }
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -62,7 +94,10 @@ async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): 
       };
 
       const fallbackTimer = setTimeout(() => {
-        finish(false, 'Unreachable');
+        const defaultMsg = (isHttpsDashboard && isHttpTarget)
+          ? 'Mixed Content (HTTPS page cannot ping HTTP target)'
+          : 'Unreachable';
+        finish(false, defaultMsg);
       }, 2500);
 
       img.onload = () => {
@@ -72,16 +107,17 @@ async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): 
 
       img.onerror = () => {
         clearTimeout(fallbackTimer);
-        // An onerror on an image loaded from an HTTP server still indicates the host is reachable and responding with a socket/HTTP status (e.g. 404/403/HTML)
         const elapsed = performance.now() - imgStartTime;
         if (elapsed < 2000) {
           finish(true, 'Reachable');
         } else {
-          finish(false, 'Unreachable');
+          const defaultMsg = (isHttpsDashboard && isHttpTarget)
+            ? 'Mixed Content Block (HTTP URL on HTTPS dashboard)'
+            : 'Unreachable';
+          finish(false, defaultMsg);
         }
       };
 
-      // Try appending /favicon.ico or ping with timestamp
       try {
         const parsed = new URL(targetUrl);
         parsed.pathname = '/favicon.ico';
@@ -96,13 +132,12 @@ async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): 
 
 /**
  * Pings the remote URL of the service.
- * Supports both full-stack setups (via backend proxy `/api/ping`) and static deployment environments (e.g. Cloudflare Pages).
+ * Supports full-stack setups (Node Express / Cloudflare Functions `/api/ping`) and static deployment environments.
  */
 export async function pingService(
   service: DockerService,
-  _activeUrl?: string
+  pingProxyUrl?: string
 ): Promise<ServiceStatus> {
-  // Only use the external (remote) URL as configured
   const targetUrl = service.remoteUrl?.trim() || service.localUrl?.trim();
 
   if (!targetUrl) {
@@ -120,7 +155,7 @@ export async function pingService(
   const timeoutId = setTimeout(() => controller.abort(), 6000);
 
   try {
-    // 1. First attempt the backend proxy if available (Full-stack mode)
+    // 1. Attempt backend proxy API (/api/ping) - supported by Express server AND Cloudflare Pages Functions
     const res = await fetch('/api/ping', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -129,10 +164,15 @@ export async function pingService(
     });
     clearTimeout(timeoutId);
 
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+
+    // Verify response is valid JSON (prevents HTML SPA fallback parsing errors on static hosts)
+    if (res.ok && contentType.includes('application/json')) {
       const data = await res.json();
       const latency = data.latency || Math.round(performance.now() - startTime);
-      const isOnline = Boolean(data.online && (!data.statusCode || (data.statusCode >= 200 && data.statusCode < 400)));
+      const isOnline = Boolean(
+        data.online && (!data.statusCode || (data.statusCode >= 200 && data.statusCode < 400))
+      );
 
       return {
         serviceId: service.id,
@@ -140,36 +180,25 @@ export async function pingService(
         statusCode: data.statusCode,
         latencyMs: latency,
         lastChecked: Date.now(),
-        message: isOnline ? (data.statusCode ? `HTTP ${data.statusCode} OK` : 'Online') : (data.error || `HTTP Error ${data.statusCode || 'Failed'}`),
+        message: isOnline
+          ? (data.statusCode ? `HTTP ${data.statusCode} OK` : 'Online')
+          : (data.error || `HTTP Error ${data.statusCode || 'Failed'}`),
       };
     }
 
-    // If server returned 404 (static hosting without Express backend, e.g. Cloudflare Pages / Vercel static),
-    // fallback to direct client-side browser probe
-    if (res.status === 404 || res.status === 502) {
-      const directResult = await probeDirectBrowser(targetUrl);
-      return {
-        serviceId: service.id,
-        state: directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline',
-        latencyMs: directResult.latency,
-        lastChecked: Date.now(),
-        message: directResult.message || (directResult.online ? 'Online' : 'Offline'),
-      };
-    }
-
+    // If server returned non-JSON (e.g. index.html SPA fallback) or 404/502/etc., fallback to direct browser probe
+    const directResult = await probeDirectBrowser(targetUrl, 4000, pingProxyUrl);
     return {
       serviceId: service.id,
-      state: 'offline',
-      latencyMs: Math.round(performance.now() - startTime),
+      state: directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline',
+      latencyMs: directResult.latency,
       lastChecked: Date.now(),
-      message: 'Proxy Error ' + res.status,
+      message: directResult.message || (directResult.online ? 'Online' : 'Offline'),
     };
-  } catch (err: unknown) {
+  } catch {
     clearTimeout(timeoutId);
-    
-    // If the fetch to /api/ping completely fails (e.g. static CDN host or network error), fallback directly to client-side probe
     try {
-      const directResult = await probeDirectBrowser(targetUrl);
+      const directResult = await probeDirectBrowser(targetUrl, 4000, pingProxyUrl);
       return {
         serviceId: service.id,
         state: directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline',

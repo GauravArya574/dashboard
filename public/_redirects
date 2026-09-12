@@ -1,0 +1,4 @@
+# Redirect rules for Cloudflare Pages / Netlify SPA hosting
+# Direct /api/* requests to functions/backend if available, otherwise SPA fallback
+/api/*  /api/:splat  200
+/*      /index.html   200
