@@ -134,7 +134,7 @@ export const GatewaySettingsModal: React.FC<GatewaySettingsModalProps> = ({
                 type="text"
                 value={formData.homeGatewayIp}
                 onChange={(e) => setFormData({ ...formData, homeGatewayIp: e.target.value })}
-                placeholder="192.168.1.1"
+                placeholder="192.168.0.1"
                 className="w-full px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-xl text-slate-100 font-mono focus:border-indigo-500 outline-none"
               />
               <p className="text-[11px] text-slate-500 mt-1">
@@ -150,7 +150,7 @@ export const GatewaySettingsModal: React.FC<GatewaySettingsModalProps> = ({
                 type="text"
                 value={formData.homeSubnetPrefix}
                 onChange={(e) => setFormData({ ...formData, homeSubnetPrefix: e.target.value })}
-                placeholder="192.168.1."
+                placeholder="192.168.0."
                 className="w-full px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-xl text-slate-100 font-mono focus:border-indigo-500 outline-none"
               />
               <p className="text-[11px] text-slate-500 mt-1">
@@ -167,7 +167,7 @@ export const GatewaySettingsModal: React.FC<GatewaySettingsModalProps> = ({
               type="text"
               value={formData.probeLocalHost}
               onChange={(e) => setFormData({ ...formData, probeLocalHost: e.target.value })}
-              placeholder="http://192.168.1.1"
+              placeholder="http://192.168.0.1"
               className="w-full px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-xl text-slate-100 font-mono focus:border-indigo-500 outline-none"
             />
             <p className="text-[11px] text-slate-500 mt-1">
