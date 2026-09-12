@@ -117,8 +117,9 @@ export default function App() {
 
     if (!isSupabaseConfigured || !supabase) {
       setIsLoadingServices(false);
+      setServices(DEFAULT_SERVICES);
       setDbError(
-        'Supabase is not configured. Please define VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.'
+        'Supabase env variables (VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY) are not set. Displaying default services.'
       );
       return;
     }
@@ -126,7 +127,7 @@ export default function App() {
     try {
       // 1. Load Services
       const fetched = await fetchServices();
-      setServices(fetched);
+      setServices(fetched.length > 0 ? fetched : DEFAULT_SERVICES);
 
       // 2. Load App Gateway Config & Settings from Supabase
       const appSettings = await fetchAppSettings();
